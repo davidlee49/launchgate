@@ -141,6 +141,77 @@ input falls through the normal chain rather than pushing the flag anywhere.
 > A flag records a decision a person made. A circuit breaker records a fact the
 > system observed.
 
+## Next.js
+
+```sh
+pnpm add launchgate   # `next` is an optional peer dependency
+```
+
+```ts
+// app/flag-override/route.ts   ← NOT app/__flags/: see the trap below
+import { createOverrideRoute } from "launchgate/next";
+import { gate } from "@/flags";
+
+export const { GET } = createOverrideRoute({
+  resolver: gate,
+  secret: process.env.FLAG_SECRET!,
+  accessToken: process.env.FLAG_ACCESS_TOKEN!,   // presented as ?token=, never the signing secret
+});
+```
+
+Then `GET /flag-override?token=…&flag=newHomepage&value=on` sets the cookie,
+`&value=off` flips it, omitting `value` clears that flag, and `&clear=1` drops
+all of them. A wrong token gets a 404, not a 401 — an unadvertised route should
+stay unadvertised.
+
+Read a flag in a page or handler:
+
+```ts
+import { requestContext, requireFlag } from "launchgate/next";
+
+const on = await gate.resolve("newHomepage", await requestContext());     // page
+const blocked = await requireFlag(gate, "network", { subject: orgId });   // handler → 404 | null
+```
+
+### Static rendering — measured, not guessed
+
+`requestContext()` calls `cookies()`, and that **opts the page into dynamic
+rendering**. Verified against Next 16.3.1 by reading `next build`'s route table:
+
+| Page | How it reads the flag | Build classification |
+| --- | --- | --- |
+| `/hidden` | `requestContext()` in the page | **ƒ Dynamic** |
+| `/home` → `/variants/v1`,`/v2` | proxy reads the cookie and rewrites | **○ Static** (all three) |
+
+- **Already-dynamic page** (anything authenticated): just call
+  `requestContext()`. The dynamic cost is already paid.
+- **Page that must stay static** (marketing, landing, docs): don't read the flag
+  in the page. Author the variants as separate routes and rewrite in `proxy.ts`:
+
+```ts
+// proxy.ts  (Next 16's rename of middleware.ts)
+import { NextResponse, type NextRequest } from "next/server";
+import { readOverrides } from "launchgate";
+
+export async function proxy(request: NextRequest) {
+  const token = request.cookies.get("lg_override")?.value;
+  const overrides = token ? await readOverrides(token, process.env.FLAG_SECRET!) : undefined;
+  const variant = overrides?.newHomepage === true ? "v2" : "v1";
+  return NextResponse.rewrite(new URL(`/variants/${variant}`, request.url));
+}
+
+export const config = { matcher: "/home" };
+```
+
+There is no third option. Resolving in the proxy and forwarding a request header
+doesn't help: the page then calls `headers()`, which opts it into dynamic
+rendering just the same. Forwarding moves the read, not the cost.
+
+> **Trap.** A route handler under a `_`-prefixed directory — `app/__flags/route.ts`
+> — **never registers**. `_` marks a private folder in the App Router, excluded
+> from routing silently, with no build error and no 404 in the route table. Mount
+> the override route at a normal path.
+
 ## Async work
 
 Resolve at submission and **stamp the value into the job payload**. A job
@@ -152,7 +223,7 @@ than being re-interpreted through the current flag value.
 
 ## Install
 
-```
+```sh
 pnpm add github:<owner>/launchgate#v0.1.0
 ```
 
@@ -161,7 +232,7 @@ committed `dist/`.
 
 ## Development
 
-```
+```sh
 pnpm install
 pnpm check     # tsc --noEmit && vitest run
 ```

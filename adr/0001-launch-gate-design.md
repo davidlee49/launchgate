@@ -77,7 +77,7 @@ alternative code path is *permitted to exist* but never *chooses* it.
 
 ### 2. The engine: an ordered list of sources, first definite answer wins
 
-```
+```text
 resolve(key, ctx):
   for source of sources:
     d = source(flagMeta, ctx)
@@ -186,14 +186,40 @@ The core imports no framework and no Node built-ins — signing uses Web Crypto
 (`crypto.subtle`), which is present in both Workers and Node 18+, so the same
 build runs on the edge.
 
-**Deferred, deliberately: the cookie override versus static rendering.** Reading
-a cookie makes a Next.js route dynamic; under OpenNext on Cloudflare Workers that
-can silently opt pages out of static rendering — the cost the Flags SDK invented
-precompute to avoid. Two candidate resolutions: check the cookie only on routes
-that are already dynamic; or resolve once in middleware and forward a request
-header the RSC tree reads. This is decided when the Next adapter meets its first
-static page, and the answer is recorded here. It is deferred rather than guessed
-because the trade-off is measurable and guessing would bake in the wrong one.
+**Resolved 2026-08-15: the cookie override versus static rendering.** Measured
+against Next.js 16.3.1 with a throwaway app, reading `next build`'s route table.
+
+| Page | How it reads the flag | Build classification |
+| --- | --- | --- |
+| `/hidden` | `requestContext()` in the page | **ƒ Dynamic** |
+| `/home` → `/variants/v1`, `/variants/v2` | proxy reads the cookie, rewrites | **○ Static** (all three) |
+
+So: **reading the cookie in the page opts that page into dynamic rendering** —
+there is no trick that avoids it, because `cookies()` is the opt-in signal
+itself. The rejected candidate was "resolve in middleware and forward a request
+header": the page must then call `headers()`, which opts it into dynamic
+rendering just the same. Forwarding moves the read, not the cost.
+
+The mechanism that *does* preserve static rendering is a rewrite: the proxy
+(`proxy.ts` — Next 16's rename of `middleware.ts`) reads the cookie and rewrites
+to one of several prebuilt variant routes, each of which stays statically
+prerendered. This is the Flags SDK's precompute pattern arrived at from first
+principles, and it is the only shape that works.
+
+The guidance is therefore:
+
+- **Already-dynamic page** (anything authenticated — most of a product app):
+  call `requestContext()` and read the flag directly. The dynamic cost is
+  already paid; nothing is lost.
+- **Page that must stay static** (marketing, landing, docs): do not read the flag
+  in the page at all. Author the variants as separate routes and rewrite in
+  `proxy.ts`. Costs one prebuilt route per variant, which is why this is reserved
+  for pages that genuinely need it rather than made the default.
+
+**Trap, found the same way:** a route handler under a `_`-prefixed directory
+(`app/__flags/route.ts`) never registers — `_` marks a *private folder* in the
+App Router and is excluded from routing, silently and with no build error. Mount
+the override route at a normal path (`app/flag-override/route.ts`).
 
 ### 8. Registry types at the call site, `unknown` inside
 
