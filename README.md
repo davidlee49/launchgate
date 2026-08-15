@@ -272,8 +272,19 @@ than being re-interpreted through the current flag value.
 pnpm add github:<owner>/launchgate#v0.1.0
 ```
 
-The package builds on install via `prepare`, so a git dependency needs no
-committed `dist/`.
+`dist/` is **committed**, so consumers install nothing and build nothing.
+
+The alternative — building on install via `prepare` — is designed for
+npm-published packages and misfires badly for a git dependency: pnpm 10 blocks it
+outright (`ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`) until each consumer allowlists
+the package, and once allowed, every consumer installs this library's full
+devDependencies (Next, React, tsup, vitest) to rebuild 6 KB of output. Committed
+output is the cheaper trade.
+
+**So: run `pnpm check` before you tag.** It typechecks, tests, *and* rebuilds
+`dist/`, which is the only thing keeping the committed output honest. Keep
+`version` in step with the tag too — pnpm reports the manifest version in errors,
+so a stale one makes them read as the wrong release.
 
 ## Development
 
