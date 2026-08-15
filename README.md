@@ -204,6 +204,11 @@ export const { GET } = createOverrideRoute({
 });
 ```
 
+**If your app has an auth gate, exclude this route from it.** Inside the matcher
+it redirects to your login page and the cookie is never set — the mechanic
+silently does nothing. Its `?token=` is its authorization, and working logged-out
+is the point.
+
 Then `GET /flag-override?token=…&flag=newHomepage&value=on` sets the cookie,
 `&value=off` flips it, omitting `value` clears that flag, and `&clear=1` drops
 all of them. A wrong token gets a 404, not a 401 — an unadvertised route should
