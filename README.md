@@ -100,6 +100,51 @@ const orgGrant: Source = {
 Conjunctions ("entitled **and** opted in") are a *requirement* source: return the
 off-value, or `undefined` to stay out of the way. The chain stays first-wins.
 
+## Storage-backed flags
+
+For projects that want to flip a flag per tenant without a deploy. `subjectStore`
+owns the semantics; you own the SQL — any database, any client:
+
+```ts
+const store = subjectStore({
+  load: async (subject, key) => {
+    const row = await db.overrideFor(subject, key);   // (subject_id, flag_key, override)
+    return row && { override: row.override, optedIn: row.opted_in };
+  },
+  requiresOptIn: (flag) => flag.def.selfServe === true,
+});
+
+createResolver({
+  flags,
+  sources: [
+    envOverride(),
+    store.kill,           // 1. a 'disabled' row — outranks the cookie
+    cookieOverride({ secret }),
+    store.requireOptIn,   // 3a. veto anything the tenant hasn't switched on
+    store.grant,          // 3b. an 'enabled' row
+    envDefault({ env }),
+  ],
+});
+```
+
+Three sources, one storage read: they share a cache keyed on the `Context`
+object, which is per request, so a request pays one `load` per flag no matter how
+many of the three are in the chain.
+
+`'disabled'` and `'enabled'` are one row but two sources because they belong in
+**different slots** — a per-tenant kill has to outrank a visitor cookie for the
+same reason the env kill switch does, while a grant sits below it. `requireOptIn`
+sits ahead of `grant` because it must be able to veto an entitlement decided by a
+*later* source (a plan lookup, a stage rule) — a veto that runs after the
+decision it's vetoing never fires.
+
+Project-specific policy stays yours. Hang your own fields on a flag def (`stage`,
+`tier`, `owner`) and read them in your own source — the registry keeps their real
+types.
+
+> There is no `launchgate/postgres` subpath. Once the interface is a `load`
+> function, nothing Postgres-specific is left to ship.
+
 ## Testing
 
 ```ts

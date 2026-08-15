@@ -7,6 +7,14 @@ export type { EnvOverrideOptions, EnvDefaultOptions } from "./sources/env.js";
 export { cookieOverride, DEFAULT_OVERRIDE_COOKIE } from "./sources/cookie.js";
 export type { CookieOverrideOptions } from "./sources/cookie.js";
 
+export { subjectStore } from "./sources/subject.js";
+export type {
+	LoadSubjectState,
+	SubjectState,
+	SubjectStore,
+	SubjectStoreOptions,
+} from "./sources/subject.js";
+
 export { signOverrides, readOverrides } from "./signing.js";
 
 export { withFlags } from "./testing.js";

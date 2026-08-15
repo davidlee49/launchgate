@@ -149,6 +149,19 @@ without a deploy: that is slot 3, an optional adapter. The core requires no
 storage at all, so slots 1, 2, 4 and the fallback are enough for a static
 marketing site.
 
+The storage seam is `subjectStore({ load })`, which returns three sources —
+`kill`, `requireOptIn`, `grant` — sharing one read per request via a cache keyed
+on the `Context` object. They are three rather than one because they belong in
+different slots: a per-subject kill must outrank a visitor cookie for the same
+reason the environment kill switch does, a grant sits below it, and an opt-in
+requirement must sit *ahead* of whatever it vetoes, since a veto evaluated after
+the decision it vetoes never fires.
+
+`load` is a project-supplied function, so this is database-agnostic and there is
+no `launchgate/postgres` package: once the interface is a function returning
+`{ override, value, optedIn }`, nothing Postgres-specific remains to ship. A row
+shape of `(subject_id, flag_key, override)` satisfies it.
+
 ### 5. Resolution is per call, uncached, server-side
 
 **No in-memory ruleset with background refresh.** That model (Unleash,

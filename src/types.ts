@@ -19,6 +19,13 @@ export interface FlagDef<T extends FlagValue = FlagValue> {
 	overridable?: boolean;
 	/** Per-environment value, consulted by the `envDefault` source. */
 	byEnv?: Record<string, T>;
+	/**
+	 * Projects may hang their own fields here — a stage, a tier, an owner — and
+	 * read them back inside a custom source. The registry keeps their real types
+	 * (`flags.network.stage` is a `string`); only the erased view a `Source` sees
+	 * widens to `unknown`.
+	 */
+	[projectField: string]: unknown;
 }
 
 export type FlagRegistry = Record<string, FlagDef>;
