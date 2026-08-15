@@ -1,0 +1,234 @@
+# ADR 0001 — launchgate: a launch-gate library, not a flag platform
+
+**Date:** 2026-08-15
+**Status:** Accepted (phase 1 — core package)
+
+> Several projects need to hide work-in-progress from the public while remaining
+> visible to their author, and to kill a shipped feature without a redeploy. This
+> ADR defines a small, storage-optional, framework-agnostic library that does
+> exactly that: a typed registry in the consuming repo, an **ordered list of
+> sources** resolved first-definite-wins, and an evaluation call that cannot
+> throw. It deliberately excludes experimentation, entitlements, and
+> health-driven routing, and says why each would be a mistake to fold in.
+
+---
+
+## Context
+
+"Feature flag" names five different things with incompatible requirements:
+
+| Archetype | Lifespan | Flipped by | Needs |
+| --- | --- | --- | --- |
+| **Release toggle** | Days–weeks, then deleted | Engineer | env / per-visitor targeting; easy deletion |
+| **Kill switch / ops** | Permanent | Engineer, on-call | Fast propagation; must work when things are broken |
+| **Experiment** | Weeks | PM / analyst | Sticky assignment + exposure logging + metrics |
+| **Entitlement** | Permanent | Sales / billing | Contract as source of truth; quotas; audit; upsell path |
+| **Dynamic config** | Permanent | Engineer | Returns *values*, not booleans |
+
+Products differ on whether to unify them. LaunchDarkly makes everything a flag
+with variants; Statsig keeps feature gates, dynamic configs, and experiments as
+distinct products. Statsig's split is the better *teaching*; LaunchDarkly's
+unification is the better *commercial product* — one UI, one SDK, one bill.
+
+This library is not a commercial product, and unifying costs more than it saves:
+
+- **Experiments** need an analytics pipeline. At tens of tenants, statistical
+  inference is noise with a dashboard.
+- **Entitlements** derive from a *contract*. Putting billing truth in a flag
+  store gives it no transactional relationship to the subscription record, so a
+  downgrade and a flag flip can disagree — and an engineer sweeping stale flags
+  deletes revenue logic that looked like dead state. This is why Stripe
+  Entitlements, Schematic, and Salable exist as separate billing-native products.
+- **Health-driven routing** (fail over to a backup provider during an outage) is
+  a machine decision made in seconds from observed health. Implemented as a flag,
+  a human must notice the outage, and MTTR becomes human-paced.
+
+The demand is real and narrow: **release toggles and kill switches**, across
+projects that range from a fully authenticated multi-tenant app to an anonymous
+public marketing site.
+
+### Prior art consulted
+
+- **OpenFeature** (CNCF) — Evaluation API / Provider / Evaluation Context /
+  Hooks. Its load-bearing interface decision is that evaluation takes a default
+  and **cannot throw**; it degrades. Its `targetingKey` is an *optional* subject.
+  Both are adopted here. Its provider abstraction is over-general for this scope
+  (it exists so vendors can be swapped); the equivalent seam here is `Source`.
+- **Vercel Flags SDK** — flags-as-code (`flag({ key, decide })`), server-only
+  evaluation, and the precompute pattern that keeps pages static. The
+  flags-as-code position and the server-only constraint are adopted; precompute
+  is not (see Decision 7).
+- **Unleash / LaunchDarkly server SDKs** — in-memory ruleset with background
+  refresh. Not adopted (see Decision 5).
+
+## Decision
+
+### 1. Scope: release toggles and kill switches, value-typed
+
+A flag resolves to a **value**, not necessarily a boolean. Boolean is the common
+case; `'v1' | 'v2'` is a legitimate one (which pipeline a submitted job uses).
+Making the core value-typed costs almost nothing now and is a breaking change
+later.
+
+Out of scope, permanently: experimentation. Out of scope, by delegation:
+entitlements and routing — an entitlement is an **input** to resolution (a
+`Source` the consuming project supplies), and a flag may say whether an
+alternative code path is *permitted to exist* but never *chooses* it.
+
+### 2. The engine: an ordered list of sources, first definite answer wins
+
+```
+resolve(key, ctx):
+  for source of sources:
+    d = source(flagMeta, ctx)
+    if d !== undefined: return d          // decided
+  return flagMeta.fallback                // terminal, always present
+```
+
+`undefined` means *undecided — ask the next source*. Any other value, **including
+`false`**, is a decision. This three-valued fall-through is the whole mechanic.
+
+The recommended ordering, and what each slot is for:
+
+| # | Source | Purpose |
+| --- | --- | --- |
+| 1 | `envOverride` | Operator override. Primary use: the kill switch. |
+| 2 | `cookieOverride` | Signed per-visitor override — how the author sees hidden work. |
+| 3 | *(project-supplied)* | Allowlist / grant / opt-in / entitlement, usually DB-backed. |
+| 4 | `envDefault` | The registry's per-environment value. |
+| — | `fallback` | Terminal. Not a source, so it cannot be forgotten. |
+
+Two invariants:
+
+- **`envOverride` outranks `cookieOverride`.** Otherwise a flag forced on by a
+  cookie survives the attempt to kill it — the exact scenario a kill switch
+  exists for.
+- **`cookieOverride` honours only flags declaring `overridable: true`.** A
+  visitor must never be able to force a flag with real consequences. Today most
+  are cosmetic; the day a project puts an entitlement source in slot 3, it stops
+  being cosmetic.
+
+**It is a chain, not a graph.** No flag consults another flag; there is no
+traversal, no derived relation, no arrow. That constraint is what keeps
+resolution readable and is the difference between this and a rules engine. (It is
+also the structural difference from a ReBAC authorization system like SpiceDB,
+where the answer is *derived* by walking edges and there is no "undecided". Same
+choke-point discipline, different engine — and feature gating stays out of the
+authorization schema, because product packaging churns on pricing cadence and
+authorization schema on domain-model cadence.)
+
+Conjunctions ("entitled **and** opted in") are expressed as a *requirement*
+source that returns a definite off-value or stays undecided. The chain itself
+stays first-wins.
+
+### 3. Evaluation cannot throw; the fail-safe value is per flag
+
+Every source call is wrapped. A throwing source **aborts the chain and returns
+`fallback`**, reporting through `onError`. It does not fall through to the next
+source: predictability beats availability here — there is exactly one degraded
+answer per flag and it is declared in the registry next to the flag.
+
+The fail-safe value is per flag because polarity differs by archetype:
+
+- A WIP gate's safe state is **off**. Fail-closed is correct.
+- A kill switch on a year-old GA feature's safe state is **on**. Failing to "off"
+  would take down working functionality because a database blipped.
+
+A global fail-closed policy gets the second case wrong, so there isn't one.
+
+### 4. Registry in code, in the consuming repo; state (if any) in data
+
+The **list** of flags is a typed const in the project that reads them, not a
+table and not library configuration. Flags ship with the code they gate:
+deletion is a PR, keys are greppable, and a flag with no reader is visibly dead.
+A flag key created at runtime through an admin UI becomes invisible dead state —
+the failure this avoids.
+
+Only **state** goes in storage, and only for projects that want runtime flipping
+without a deploy: that is slot 3, an optional adapter. The core requires no
+storage at all, so slots 1, 2, 4 and the fallback are enough for a static
+marketing site.
+
+### 5. Resolution is per call, uncached, server-side
+
+**No in-memory ruleset with background refresh.** That model (Unleash,
+LaunchDarkly server SDKs) exists to avoid a network hop to a *separate* flag
+service. When slot 3 reads the same database the request already depends on,
+caching buys nothing: if that store is down, the request was already dead. It
+costs a staleness window and a bootstrap story, on a runtime (Workers isolates)
+where cold starts are frequent. Revisit above roughly a few hundred gated
+requests per second, measured.
+
+**No client-side evaluation.** Flags are read on the server during render, as in
+the Vercel Flags SDK, which avoids flag-driven layout shift and keeps hidden work
+out of the client bundle. A flag whose value reaches the browser must be one the
+public may know exists.
+
+### 6. Async work resolves at submission and stamps the value into the payload
+
+A job enqueued Monday and executed Wednesday must use **Monday's** value, written
+into the job payload. Re-reading at execution time gives a job that is half one
+behaviour and half the other, and — under a deterministic workflow engine such as
+Temporal — breaks replay outright.
+
+The corollary is that downstream services get **resolved values, not a flag
+client**. A service that executes resolved instructions must not re-decide what
+the control plane already decided. Consequently this library ships no
+non-JavaScript client, and needs none.
+
+Records produced by gated code must carry their own provenance ("this artifact
+was produced by pipeline v2"), not be re-interpreted through the current flag
+value.
+
+### 7. Framework specifics live in adapters, and one question is deferred
+
+The core imports no framework and no Node built-ins — signing uses Web Crypto
+(`crypto.subtle`), which is present in both Workers and Node 18+, so the same
+build runs on the edge.
+
+**Deferred, deliberately: the cookie override versus static rendering.** Reading
+a cookie makes a Next.js route dynamic; under OpenNext on Cloudflare Workers that
+can silently opt pages out of static rendering — the cost the Flags SDK invented
+precompute to avoid. Two candidate resolutions: check the cookie only on routes
+that are already dynamic; or resolve once in middleware and forward a request
+header the RSC tree reads. This is decided when the Next adapter meets its first
+static page, and the answer is recorded here. It is deferred rather than guessed
+because the trade-off is measurable and guessing would bake in the wrong one.
+
+### 8. Registry types at the call site, `unknown` inside
+
+`defineFlags` infers each flag's value type, so `resolve('newHomepage')` is typed.
+Sources, however, operate over a heterogeneous registry and are typed against
+`unknown`; the resolver casts at its boundary. This is a deliberate trade: full
+generic propagation through a source list buys type safety in the place least
+likely to be wrong (four built-in sources, each a few lines) at the cost of
+signatures no one can read.
+
+## Consequences
+
+- A project with no database, no auth, and no tenants can hide work in progress
+  with a registry, an environment variable, and a signed cookie.
+- A multi-tenant project composes its own policy — stages, grants, opt-in,
+  entitlement — as sources. The library never learns what a "stage" is; that
+  vocabulary stays in the project that has it.
+- There is deliberately no way to run a statistically valid experiment, and no
+  way for an admin UI to create a flag that no code reads.
+- Every gated request pays one read per storage-backed source, uncached.
+- Two adapters must exist per framework family (route handler + guard); today
+  only Next.js is planned.
+- Flag debt is the dominant long-run cost and the library does not solve it. The
+  registry's `description` field and the fact that keys are greppable are the
+  whole mitigation.
+
+## References
+
+- OpenFeature specification — evaluation API, provider, evaluation context
+  (<https://openfeature.dev/specification/>). Adopted: cannot-throw evaluation,
+  optional subject key.
+- Vercel Flags SDK (<https://flags-sdk.dev/>) — flags-as-code, server-only
+  evaluation, precompute (not adopted; see Decision 7).
+- Statsig vs LaunchDarkly on flag/config/experiment separation — the taxonomy in
+  Context.
+- impartire ADR 0040 (org feature entitlements, staged rollout) — the
+  implementation this library is extracted from; its stage vocabulary and
+  org-as-unit decision remain that project's composition, not library semantics.

@@ -1,0 +1,27 @@
+{
+	"name": "launchgate",
+	"version": "0.1.0",
+	"description": "A launch-gate library: hide work in progress, kill a shipped feature, no platform required.",
+	"license": "MIT",
+	"type": "module",
+	"files": ["dist"],
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"scripts": {
+		"build": "tsup",
+		"check": "tsc --noEmit && vitest run",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"prepare": "tsup"
+	},
+	"devDependencies": {
+		"tsup": "^8.5.0",
+		"typescript": "^5.9.2",
+		"vitest": "^3.2.4"
+	},
+	"packageManager": "pnpm@10.29.2"
+}
