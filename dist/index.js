@@ -141,6 +141,50 @@ function subjectStore(options) {
   };
 }
 
+// src/route-gate.ts
+function matchesPrefix(pathname, prefixes) {
+  return prefixes.some(
+    (prefix) => pathname === prefix || pathname.startsWith(prefix + "/")
+  );
+}
+function createRouteGate(options) {
+  const { resolver, routes, allow = [], unlisted } = options;
+  const entries = Object.entries(routes);
+  for (const [key, prefixes] of entries) {
+    for (const prefix of prefixes) {
+      if (allow.includes(prefix)) {
+        throw new Error(
+          `launchgate: "${prefix}" is both allowed and gated by flag "${key}". The allowlist would serve it whatever the flag says, so the flag is dead.`
+        );
+      }
+    }
+    if (!(key in resolver.flags)) {
+      throw new Error(`launchgate: routes reference unknown flag "${key}"`);
+    }
+  }
+  async function revealedPrefixes(ctx = {}) {
+    const revealed = await Promise.all(
+      entries.map(
+        async ([key, prefixes]) => await resolver.resolve(key, ctx) ? prefixes : []
+      )
+    );
+    return revealed.flat();
+  }
+  return {
+    revealedPrefixes,
+    async permittedPrefixes(ctx) {
+      return [...allow, ...await revealedPrefixes(ctx)];
+    },
+    async isPermitted(pathname, ctx) {
+      if (matchesPrefix(pathname, allow)) return true;
+      if (matchesPrefix(pathname, await revealedPrefixes(ctx))) return true;
+      const flagged = entries.flatMap(([, prefixes]) => prefixes);
+      if (matchesPrefix(pathname, flagged)) return false;
+      return unlisted === "allow";
+    }
+  };
+}
+
 // src/testing.ts
 function withFlags(flags, values = {}) {
   return createResolver({
@@ -157,9 +201,11 @@ export {
   DEFAULT_OVERRIDE_COOKIE,
   cookieOverride,
   createResolver,
+  createRouteGate,
   defineFlags,
   envDefault,
   envOverride,
+  matchesPrefix,
   readOverrides,
   signOverrides,
   subjectStore,

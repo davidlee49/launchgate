@@ -100,6 +100,44 @@ const orgGrant: Source = {
 Conjunctions ("entitled **and** opted in") are a *requirement* source: return the
 off-value, or `undefined` to stay out of the way. The chain stays first-wins.
 
+## Gating routes
+
+Flags answer "is this on". `createRouteGate` answers the question a web app
+actually asks — **"may this path be served"** — from two lists you supply:
+
+```ts
+const gate = createRouteGate({
+  resolver: launch,
+  routes: { workflows: ["/workflows"], network: ["/network", "/api/network"] },
+  allow:   ["/", "/assets", "/api/assets"],   // the launched surface
+  unlisted: "deny",
+});
+
+await gate.isPermitted("/workflows", { cookie });   // middleware
+await gate.revealedPrefixes({ cookie });            // to filter nav server-side
+```
+
+The allowlist is checked **first**, so a launched route short-circuits and
+resolves no flags at all.
+
+`unlisted` has no default, because it is the whole safety posture and the two
+answers fail very differently:
+
+- `"deny"` — a route added tomorrow is hidden until someone lists it. It 404s
+  loudly, and safely. Right for an app with unlaunched surfaces in the tree.
+- `"allow"` — a new route ships the moment it exists, and forgetting to flag
+  work in progress leaks it silently.
+
+A flag that is **off** denies its paths under either posture; `unlisted` only
+decides paths nothing has an opinion about.
+
+**It throws at construction** if a prefix is both allowed and flagged. That flag
+could never change anything — the allowlist would serve the path regardless — and
+a dead launch gate is precisely the bug you cannot afford to discover late.
+
+`matchesPrefix(pathname, prefixes)` is exported standalone for client-side nav
+filtering, so the menu can't disagree with the router.
+
 ## Storage-backed flags
 
 For projects that want to flip a flag per tenant without a deploy. `subjectStore`

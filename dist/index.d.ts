@@ -1,4 +1,4 @@
-import { S as Source, F as FlagMeta, a as FlagValue, C as Context, b as FlagRegistry, c as FlagValueOf, R as Resolver } from './resolver-DjTGv8b9.js';
+import { S as Source, F as FlagMeta, a as FlagValue, C as Context, b as FlagRegistry, R as Resolver, c as FlagValueOf } from './resolver-DjTGv8b9.js';
 export { D as Decision, d as FlagDef, e as ResolverOptions, f as SourceErrorInfo, g as createResolver, h as defineFlags } from './resolver-DjTGv8b9.js';
 
 interface EnvOverrideOptions {
@@ -107,6 +107,59 @@ interface SubjectStore {
 declare function subjectStore(options: SubjectStoreOptions): SubjectStore;
 
 /**
+ * Prefix match: exact, or a path segment below it.
+ *
+ * `"/"` matches only `"/"` — it falls out of the general rule rather than needing
+ * a special case, because no real pathname starts with `"//"`.
+ *
+ * Exported standalone because nav filtering usually runs in a client component,
+ * where the rule must be identical to the server's or the menu and the router
+ * disagree.
+ */
+declare function matchesPrefix(pathname: string, prefixes: readonly string[]): boolean;
+interface RouteGateOptions<T extends FlagRegistry> {
+    resolver: Resolver<T>;
+    /** Flag key → the path prefixes it reveals. A flag may reveal several. */
+    routes: Partial<Record<keyof T & string, readonly string[]>>;
+    /**
+     * Paths served regardless of any flag — the launched surface. Omit for an
+     * app whose routes are all either public or flagged.
+     */
+    allow?: readonly string[];
+    /**
+     * What to do with a path that is neither allowed nor covered by a flag.
+     *
+     * Required, with no default, because it is the whole safety posture and the
+     * two answers fail in very different ways. `"deny"` means a route added
+     * tomorrow is hidden until someone lists it — it 404s loudly and safely.
+     * `"allow"` means it ships publicly the moment it exists, and forgetting to
+     * flag work in progress leaks it silently.
+     */
+    unlisted: "deny" | "allow";
+}
+interface RouteGate {
+    /** May this path be served right now? */
+    isPermitted(pathname: string, ctx?: Context): Promise<boolean>;
+    /** Prefixes currently revealed by a flag. For filtering nav server-side. */
+    revealedPrefixes(ctx?: Context): Promise<string[]>;
+    /** Everything servable right now — `allow` plus whatever is revealed. */
+    permittedPrefixes(ctx?: Context): Promise<string[]>;
+}
+/**
+ * Turns "which flags are on" into "which paths may be served".
+ *
+ * The app supplies two lists — what is launched, and which flag hides what. This
+ * owns the policy: check the allowlist first (so a launched route costs no flag
+ * resolution at all), then ask the flags.
+ *
+ * **Throws at construction** if a prefix is both allowed and flagged. That flag
+ * could never change anything, because the allowlist would already be letting
+ * the path through — a silent no-op that is very hard to spot by reading, and
+ * exactly the kind of thing a launch gate must not have.
+ */
+declare function createRouteGate<T extends FlagRegistry>(options: RouteGateOptions<T>): RouteGate;
+
+/**
  * Mints the signed token that `cookieOverride` reads. Lives in the core rather
  * than the framework adapter so an adapter is only cookie plumbing.
  */
@@ -127,4 +180,4 @@ type FlagValues<T extends FlagRegistry> = Partial<{
  */
 declare function withFlags<T extends FlagRegistry>(flags: T, values?: FlagValues<T>): Resolver<T>;
 
-export { Context, type CookieOverrideOptions, DEFAULT_OVERRIDE_COOKIE, type EnvDefaultOptions, type EnvOverrideOptions, FlagMeta, FlagRegistry, FlagValue, type FlagValues, type LoadSubjectState, Resolver, Source, type SubjectState, type SubjectStore, type SubjectStoreOptions, cookieOverride, envDefault, envOverride, readOverrides, signOverrides, subjectStore, withFlags };
+export { Context, type CookieOverrideOptions, DEFAULT_OVERRIDE_COOKIE, type EnvDefaultOptions, type EnvOverrideOptions, FlagMeta, FlagRegistry, FlagValue, type FlagValues, type LoadSubjectState, Resolver, type RouteGate, type RouteGateOptions, Source, type SubjectState, type SubjectStore, type SubjectStoreOptions, cookieOverride, createRouteGate, envDefault, envOverride, matchesPrefix, readOverrides, signOverrides, subjectStore, withFlags };

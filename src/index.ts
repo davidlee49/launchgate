@@ -15,6 +15,9 @@ export type {
 	SubjectStoreOptions,
 } from "./sources/subject.js";
 
+export { createRouteGate, matchesPrefix } from "./route-gate.js";
+export type { RouteGate, RouteGateOptions } from "./route-gate.js";
+
 export { signOverrides, readOverrides } from "./signing.js";
 
 export { withFlags } from "./testing.js";
