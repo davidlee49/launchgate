@@ -3,17 +3,17 @@ import { NextResponse } from "next/server";
 import type { Resolver } from "../resolver.js";
 import { readOverrides, signOverrides } from "../signing.js";
 import { DEFAULT_OVERRIDE_COOKIE } from "../sources/cookie.js";
-import type { Context, FlagRegistry, FlagValue } from "../types.js";
+import type { EvaluationContext, FlagRegistry, FlagValue } from "../types.js";
 
 /**
- * Builds a `Context` that reads cookies from the incoming request.
+ * Builds an `EvaluationContext` that reads cookies from the incoming request.
  *
  * **This opts the caller into dynamic rendering** — `cookies()` always does. On
  * a page that is already dynamic (anything authenticated) that costs nothing; on
  * a page you need statically rendered, don't call it, and see `staticVariant`
  * in the README instead.
  */
-export async function requestContext(extra: Context = {}): Promise<Context> {
+export async function requestContext(extra: EvaluationContext = {}): Promise<EvaluationContext> {
 	const jar = await cookies();
 	return { ...extra, cookie: (name) => jar.get(name)?.value };
 }
@@ -22,13 +22,13 @@ export async function requestContext(extra: Context = {}): Promise<Context> {
  * Route-handler guard. 404, not 403: a feature you don't have shouldn't
  * advertise its own existence.
  *
- *   const gate = await requireFlag(resolver, "network", { subject: orgId });
+ *   const gate = await requireFlag(resolver, "network", { targetingKey: orgId });
  *   if (gate) return gate;
  */
 export async function requireFlag<T extends FlagRegistry, K extends keyof T & string>(
 	resolver: Resolver<T>,
 	key: K,
-	ctx?: Context,
+	ctx?: EvaluationContext,
 ): Promise<NextResponse | null> {
 	const value = await resolver.resolve(key, ctx);
 	return value === false || value === undefined

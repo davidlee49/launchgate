@@ -1,5 +1,5 @@
 import type {
-	Context,
+	EvaluationContext,
 	FlagDef,
 	FlagRegistry,
 	FlagValueOf,
@@ -32,11 +32,30 @@ export interface ResolverOptions<T extends FlagRegistry> {
 	onError?: (error: unknown, info: SourceErrorInfo) => void;
 }
 
+/** Every flag in a registry, evaluated. */
+export type ResolvedFlags<T extends FlagRegistry> = {
+	[K in keyof T]: FlagValueOf<T, K>;
+};
+
 export interface Resolver<T extends FlagRegistry> {
 	resolve<K extends keyof T & string>(
 		key: K,
-		ctx?: Context,
+		ctx?: EvaluationContext,
 	): Promise<FlagValueOf<T, K>>;
+	/**
+	 * Evaluate the whole registry at once — LaunchDarkly's `allFlagsState()`
+	 * pattern: resolve server-side, hand the map to the client, and the UI never
+	 * flickers because it never had to ask.
+	 *
+	 * Resolution is concurrent and shares the context object, so subject-backed
+	 * sources hit their per-request cache; with `subjectStore({ loadAll })` the
+	 * whole registry costs one read.
+	 *
+	 * Pass the **values** to a client, never the registry — flag keys name
+	 * unshipped work, and a viewer who can't see a surface shouldn't learn its
+	 * name from the payload.
+	 */
+	resolveAll(ctx?: EvaluationContext): Promise<ResolvedFlags<T>>;
 	readonly flags: T;
 }
 
@@ -47,7 +66,7 @@ export function createResolver<T extends FlagRegistry>(
 
 	async function resolve<K extends keyof T & string>(
 		key: K,
-		ctx: Context = {},
+		ctx: EvaluationContext = {},
 	): Promise<FlagValueOf<T, K>> {
 		const def: FlagDef | undefined = flags[key];
 		// The one thing that throws. An unknown key has no fallback to degrade to,
@@ -87,5 +106,20 @@ export function createResolver<T extends FlagRegistry>(
 		return def.fallback as FlagValueOf<T, K>;
 	}
 
-	return { flags, resolve };
+	async function resolveAll(
+		ctx: EvaluationContext = {},
+	): Promise<ResolvedFlags<T>> {
+		const keys = Object.keys(flags) as (keyof T & string)[];
+		// One shared ctx across all of them — that object is the cache key every
+		// subject-backed source uses, so this is what makes the batch a batch.
+		const values = await Promise.all(keys.map((key) => resolve(key, ctx)));
+		// `Object.fromEntries` widens to an index signature, which no longer
+		// overlaps the mapped type — the cast is the assertion that the keys are
+		// exactly the registry's, which the line above guarantees.
+		return Object.fromEntries(
+			keys.map((key, i) => [key, values[i]]),
+		) as unknown as ResolvedFlags<T>;
+	}
+
+	return { flags, resolve, resolveAll };
 }

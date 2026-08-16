@@ -46,17 +46,25 @@ export type FlagValueOf<
 > = T[K]["fallback"] extends boolean ? boolean : T[K]["fallback"];
 
 /**
- * Data a source may target on. `subject` is OpenFeature's `targetingKey` and is
- * **optional** by design: an anonymous visitor to a static site has none.
+ * Data a source may target on. Named for OpenFeature's evaluation context, and
+ * `targetingKey` is its field — the CNCF spec every major SDK implements, so
+ * this reads as a familiar dialect rather than a private vocabulary.
+ *
+ * `targetingKey` is **optional** by design, where OpenFeature makes it merely
+ * conventional: an anonymous visitor to a static site has none, and a launch
+ * gate must still resolve for them.
  */
-export interface Context {
+export interface EvaluationContext {
 	/** Who is being evaluated — a user id, org id, device id. Absent for anonymous visitors. */
-	subject?: string;
+	targetingKey?: string;
 	/** Reads a request cookie. Supplied by a framework adapter; absent means "no cookies here". */
 	cookie?: (name: string) => string | undefined;
 	/** Anything else a project-supplied source needs. */
 	[key: string]: unknown;
 }
+
+/** @deprecated Renamed to `EvaluationContext` in 0.3.0 to match OpenFeature. */
+export type Context = EvaluationContext;
 
 /** A source's answer. `undefined` means *undecided — ask the next source* (Decision 2). */
 export type Decision = FlagValue | undefined;

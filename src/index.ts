@@ -1,5 +1,5 @@
 export { defineFlags, createResolver } from "./resolver.js";
-export type { Resolver, ResolverOptions } from "./resolver.js";
+export type { ResolvedFlags, Resolver, ResolverOptions } from "./resolver.js";
 
 export { envOverride, envDefault } from "./sources/env.js";
 export type { EnvOverrideOptions, EnvDefaultOptions } from "./sources/env.js";
@@ -9,6 +9,7 @@ export type { CookieOverrideOptions } from "./sources/cookie.js";
 
 export { subjectStore } from "./sources/subject.js";
 export type {
+	LoadAllSubjectState,
 	LoadSubjectState,
 	SubjectState,
 	SubjectStore,
@@ -26,6 +27,7 @@ export type { FlagValues } from "./testing.js";
 export type {
 	Context,
 	Decision,
+	EvaluationContext,
 	FlagDef,
 	FlagMeta,
 	FlagRegistry,

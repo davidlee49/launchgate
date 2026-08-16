@@ -148,13 +148,13 @@ describe("context", () => {
 				{
 					name: "spy",
 					decide: (_flag, ctx) => {
-						seen.push([ctx.subject, ctx.region]);
+						seen.push([ctx.targetingKey, ctx.region]);
 						return undefined;
 					},
 				},
 			],
 		});
-		await resolver.resolve("newHomepage", { subject: "org_1", region: "eu" });
+		await resolver.resolve("newHomepage", { targetingKey: "org_1", region: "eu" });
 		expect(seen).toEqual([["org_1", "eu"]]);
 	});
 
@@ -162,7 +162,7 @@ describe("context", () => {
 		const resolver = createResolver({
 			flags,
 			sources: [
-				{ name: "needs-subject", decide: (_f, ctx) => (ctx.subject ? true : undefined) },
+				{ name: "needs-subject", decide: (_f, ctx) => (ctx.targetingKey ? true : undefined) },
 			],
 		});
 		await expect(resolver.resolve("newHomepage")).resolves.toBe(false);
@@ -179,5 +179,50 @@ describe("withFlags", () => {
 	it("pins every flag to its fallback when given nothing", async () => {
 		const resolver = withFlags(flags);
 		await expect(resolver.resolve("legacyExport")).resolves.toBe(true);
+	});
+});
+
+describe("resolveAll", () => {
+	it("evaluates every flag in the registry", async () => {
+		const resolver = withFlags(flags, { newHomepage: true, renderPipeline: "v2" });
+		await expect(resolver.resolveAll()).resolves.toEqual({
+			newHomepage: true,
+			legacyExport: true,
+			renderPipeline: "v2",
+		});
+	});
+
+	it("shares one context object across every flag, so caches hit", async () => {
+		const seen: unknown[] = [];
+		const resolver = createResolver({
+			flags,
+			sources: [{ name: "spy", decide: (_f, ctx) => { seen.push(ctx); return undefined; } }],
+		});
+		await resolver.resolveAll({ targetingKey: "org_1" });
+		expect(seen).toHaveLength(3);
+		expect(new Set(seen).size).toBe(1);
+	});
+
+	it("degrades a failing flag to its fallback without failing the rest", async () => {
+		const onError = vi.fn();
+		const resolver = createResolver({
+			flags,
+			sources: [
+				{
+					name: "boom",
+					decide: ({ key }) => {
+						if (key === "newHomepage") throw new Error("down");
+						return undefined;
+					},
+				},
+			],
+			onError,
+		});
+		await expect(resolver.resolveAll()).resolves.toEqual({
+			newHomepage: false,
+			legacyExport: true,
+			renderPipeline: "v1",
+		});
+		expect(onError).toHaveBeenCalledTimes(1);
 	});
 });

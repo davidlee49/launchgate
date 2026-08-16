@@ -1,5 +1,5 @@
 import type { Resolver } from "./resolver.js";
-import type { Context, FlagRegistry } from "./types.js";
+import type { EvaluationContext, FlagRegistry } from "./types.js";
 
 /**
  * Prefix match: exact, or a path segment below it.
@@ -40,11 +40,11 @@ export interface RouteGateOptions<T extends FlagRegistry> {
 
 export interface RouteGate {
 	/** May this path be served right now? */
-	isPermitted(pathname: string, ctx?: Context): Promise<boolean>;
+	isPermitted(pathname: string, ctx?: EvaluationContext): Promise<boolean>;
 	/** Prefixes currently revealed by a flag. For filtering nav server-side. */
-	revealedPrefixes(ctx?: Context): Promise<string[]>;
+	revealedPrefixes(ctx?: EvaluationContext): Promise<string[]>;
 	/** Everything servable right now — `allow` plus whatever is revealed. */
-	permittedPrefixes(ctx?: Context): Promise<string[]>;
+	permittedPrefixes(ctx?: EvaluationContext): Promise<string[]>;
 }
 
 /**
@@ -80,7 +80,7 @@ export function createRouteGate<T extends FlagRegistry>(
 		}
 	}
 
-	async function revealedPrefixes(ctx: Context = {}): Promise<string[]> {
+	async function revealedPrefixes(ctx: EvaluationContext = {}): Promise<string[]> {
 		const revealed = await Promise.all(
 			entries.map(async ([key, prefixes]) =>
 				(await resolver.resolve(key, ctx)) ? prefixes : [],

@@ -90,8 +90,8 @@ to pass:
 const orgGrant: Source = {
   name: "orgGrant",
   async decide({ key }, ctx) {
-    if (!ctx.subject) return undefined;
-    const row = await db.grantFor(ctx.subject, key);
+    if (!ctx.targetingKey) return undefined;
+    const row = await db.grantFor(ctx.targetingKey, key);
     return row?.enabled;         // undefined when there's no row — undecided
   },
 };
@@ -145,9 +145,11 @@ owns the semantics; you own the SQL — any database, any client:
 
 ```ts
 const store = subjectStore({
-  load: async (subject, key) => {
-    const row = await db.overrideFor(subject, key);   // (subject_id, flag_key, override)
-    return row && { override: row.override, optedIn: row.opted_in };
+  // One read for the whole registry. `load: async (subject, key) => …` is the
+  // per-flag alternative when a batch query is awkward.
+  loadAll: async (subject) => {
+    const rows = await db.overridesFor(subject);      // (subject_id, flag_key, override)
+    return Object.fromEntries(rows.map((r) => [r.flag_key, { override: r.override, optedIn: r.opted_in }]));
   },
   requiresOptIn: (flag) => flag.def.selfServe === true,
 });
@@ -165,9 +167,10 @@ createResolver({
 });
 ```
 
-Three sources, one storage read: they share a cache keyed on the `Context`
+Three sources, one storage read: they share a cache keyed on the `EvaluationContext`
 object, which is per request, so a request pays one `load` per flag no matter how
-many of the three are in the chain.
+many of the three are in the chain. Swap `load` for `loadAll` and the whole
+registry costs one read instead of one per flag — see **Bootstrapping a client** below.
 
 `'disabled'` and `'enabled'` are one row but two sources because they belong in
 **different slots** — a per-tenant kill has to outrank a visitor cookie for the
@@ -182,6 +185,23 @@ types.
 
 > There is no `launchgate/postgres` subpath. Once the interface is a `load`
 > function, nothing Postgres-specific is left to ship.
+
+## Bootstrapping a client
+
+`resolveAll(ctx)` evaluates the whole registry at once — LaunchDarkly's
+`allFlagsState()` pattern. Resolve on the server, hand the map down, and the UI
+never flickers because it never had to ask:
+
+```ts
+const enabled = await gate.resolveAll(await requestContext({ targetingKey: orgId }));
+// → { newPricingPage: true, network: false, renderPipeline: "v2" }
+```
+
+Every flag shares the one context object, which is the cache key
+`subjectStore` uses — so with `loadAll` the whole registry costs **one** read.
+
+> Pass the **values**, never the registry. Flag keys name unshipped work, and a
+> viewer who can't see a surface shouldn't learn its name from the payload.
 
 ## Testing
 
@@ -258,7 +278,7 @@ Read a flag in a page or handler:
 import { requestContext, requireFlag } from "launchgate/next";
 
 const on = await gate.resolve("newHomepage", await requestContext());     // page
-const blocked = await requireFlag(gate, "network", { subject: orgId });   // handler → 404 | null
+const blocked = await requireFlag(gate, "network", { targetingKey: orgId }); // handler → 404
 ```
 
 ### Static rendering — measured, not guessed

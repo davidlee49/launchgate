@@ -37,7 +37,14 @@ function createResolver(options) {
     }
     return def.fallback;
   }
-  return { flags, resolve };
+  async function resolveAll(ctx = {}) {
+    const keys = Object.keys(flags);
+    const values = await Promise.all(keys.map((key) => resolve(key, ctx)));
+    return Object.fromEntries(
+      keys.map((key, i) => [key, values[i]])
+    );
+  }
+  return { flags, resolve, resolveAll };
 }
 
 // src/sources/env.ts
@@ -96,19 +103,32 @@ function offValue(flag) {
   return typeof flag.def.fallback === "boolean" ? false : flag.def.fallback;
 }
 function subjectStore(options) {
-  const { load, requiresOptIn } = options;
+  const { load, loadAll, requiresOptIn } = options;
+  if (!load && !loadAll) {
+    throw new Error("launchgate: subjectStore needs `load` or `loadAll`");
+  }
   const caches = /* @__PURE__ */ new WeakMap();
   function read(flag, ctx, subject) {
     let cache = caches.get(ctx);
     if (!cache) {
-      cache = /* @__PURE__ */ new Map();
+      cache = { perFlag: /* @__PURE__ */ new Map(), batch: /* @__PURE__ */ new Map() };
       caches.set(ctx, cache);
     }
+    if (loadAll) {
+      let batched = cache.batch.get(subject);
+      if (!batched) {
+        batched = Promise.resolve(loadAll(subject)).then(
+          (result) => result instanceof Map ? result : new Map(Object.entries(result))
+        );
+        cache.batch.set(subject, batched);
+      }
+      return batched.then((states) => states.get(flag.key));
+    }
     const cacheKey = `${subject}\0${flag.key}`;
-    let pending = cache.get(cacheKey);
+    let pending = cache.perFlag.get(cacheKey);
     if (!pending) {
       pending = Promise.resolve(load(subject, flag.key, flag));
-      cache.set(cacheKey, pending);
+      cache.perFlag.set(cacheKey, pending);
     }
     return pending;
   }
@@ -116,14 +136,14 @@ function subjectStore(options) {
     return {
       name,
       async decide(flag, ctx) {
-        if (!ctx.subject || !applies(flag)) return void 0;
-        const state = await read(flag, ctx, ctx.subject);
+        if (!ctx.targetingKey || !applies(flag)) return void 0;
+        const state = await read(flag, ctx, ctx.targetingKey);
         return state ? decide(state, flag) : decide({}, flag);
       }
     };
   }
   return {
-    state: async (flag, ctx) => ctx.subject ? read(flag, ctx, ctx.subject) : void 0,
+    state: async (flag, ctx) => ctx.targetingKey ? read(flag, ctx, ctx.targetingKey) : void 0,
     kill: source(
       "subjectKill",
       (state, flag) => state.override === "disabled" ? offValue(flag) : void 0

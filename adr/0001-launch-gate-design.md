@@ -243,6 +243,43 @@ generic propagation through a source list buys type safety in the place least
 likely to be wrong (four built-in sources, each a few lines) at the cost of
 signatures no one can read.
 
+### 9. OpenFeature's vocabulary, not its call signature (0.3.0)
+
+The evaluation context is `EvaluationContext` and its subject field is
+`targetingKey` — OpenFeature's names, because it is the CNCF vendor-neutral spec
+every major SDK implements, and a familiar dialect costs nothing while a private
+one costs every reader. `Context` remains a deprecated alias.
+
+What is **not** adopted is the per-call default —
+`getBooleanValue(key, default, ctx)`. That signature exists because an
+OpenFeature SDK doesn't own the registry and cannot know a flag's type; ours
+does. One `fallback` declared beside the flag beats N call sites free to
+disagree about what "off" means (Decision 3 depends on there being exactly one
+degraded answer per flag).
+
+Also not adopted: **prerequisite flags**. LaunchDarkly models "the page must be
+on before the component can be" as a flag depending on another flag — a DAG.
+Prerequisites earn their complexity when many teams create flags ad hoc in a
+UI; a typed registry owned by one team gets the same expressiveness by composing
+sources, and keeps the property that resolution is a *chain nobody has to
+trace*. Consumers wanting a two-level version (a release gate over an
+entitlement gate, as impartire has) compose two resolvers and `&&` them —
+explicit at the call site, no graph in the library.
+
+### 10. `resolveAll` and `loadAll` (0.3.0)
+
+`resolver.resolveAll(ctx)` evaluates the whole registry — LaunchDarkly's
+`allFlagsState()`. It exists because a client needs the full set at once
+(bootstrapping a provider so the UI never flickers), and a loop over `resolve`
+at the call site would hide the batching opportunity: every flag shares the one
+context object, which *is* the cache key `subjectStore` uses.
+
+`subjectStore({ loadAll })` is the other half — one read per subject per
+request instead of one per flag. Without it, `resolveAll` over an 18-flag
+registry is 18 queries, which is enough to make the client-provider pattern not
+worth having. `load` stays for the case where a batch query is awkward;
+supplying neither now throws at construction.
+
 ## Consequences
 
 - A project with no database, no auth, and no tenants can hide work in progress
@@ -263,7 +300,19 @@ signatures no one can read.
 
 - OpenFeature specification — evaluation API, provider, evaluation context
   (<https://openfeature.dev/specification/>). Adopted: cannot-throw evaluation,
-  optional subject key.
+  optional subject key, and (0.3.0) the `EvaluationContext` / `targetingKey`
+  vocabulary. Not adopted: the per-call default (Decision 9). Shipping
+  launchgate *as* an OpenFeature Provider is a ~40-line adapter and the obvious
+  interop seam, deferred until a second consumer or a vendor makes it earn its
+  keep.
+- LaunchDarkly — `allFlagsState()` (the shape `resolveAll` copies), flag
+  prerequisites (considered and rejected, Decision 9), and stale-flag rules
+  (temporary + 30 days old + 7 days inactive) as prior art for flag debt, which
+  this library still leaves to its consumers.
+- Unleash flag types (<https://docs.getunleash.io/reference/feature-toggles>) —
+  *Release* (temporary, ~40-day expected lifetime), *Permission* (permanent,
+  entitlement), *Kill switch*, *Sunset*. Consumers should name their flags with
+  these; the library models none of them, by Decision 4.
 - Vercel Flags SDK (<https://flags-sdk.dev/>) — flags-as-code, server-only
   evaluation, precompute (not adopted; see Decision 7).
 - Statsig vs LaunchDarkly on flag/config/experiment separation — the taxonomy in

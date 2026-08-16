@@ -1,5 +1,5 @@
-import { S as Source, F as FlagMeta, a as FlagValue, C as Context, b as FlagRegistry, R as Resolver, c as FlagValueOf } from './resolver-DjTGv8b9.js';
-export { D as Decision, d as FlagDef, e as ResolverOptions, f as SourceErrorInfo, g as createResolver, h as defineFlags } from './resolver-DjTGv8b9.js';
+import { S as Source, F as FlagValue, a as FlagMeta, E as EvaluationContext, b as FlagRegistry, R as Resolver, c as FlagValueOf } from './resolver-C_2WAfkC.js';
+export { C as Context, D as Decision, d as FlagDef, e as ResolvedFlags, f as ResolverOptions, g as SourceErrorInfo, h as createResolver, i as defineFlags } from './resolver-C_2WAfkC.js';
 
 interface EnvOverrideOptions {
     /** How to read an environment variable. Defaults to `process.env` where it exists. */
@@ -73,8 +73,21 @@ interface SubjectState {
     [projectField: string]: unknown;
 }
 type LoadSubjectState = (subject: string, key: string, flag: FlagMeta) => Promise<SubjectState | undefined> | SubjectState | undefined;
+/**
+ * Every flag's state for one subject, in one read. Keys absent from the result
+ * are treated as "no row", exactly as `load` returning `undefined` is.
+ */
+type LoadAllSubjectState = (subject: string) => Promise<Map<string, SubjectState> | Record<string, SubjectState>> | Map<string, SubjectState> | Record<string, SubjectState>;
 interface SubjectStoreOptions {
-    load: LoadSubjectState;
+    /** Per-flag read. Supply this, `loadAll`, or both. */
+    load?: LoadSubjectState;
+    /**
+     * Batch read for the whole registry. When present it is preferred, and one
+     * subject costs **one** read per request however many flags resolve — which
+     * is what makes `resolver.resolveAll()` affordable. Without it, evaluating
+     * N flags means N reads.
+     */
+    loadAll?: LoadAllSubjectState;
     /**
      * Flags the subject must switch on for themselves — entitlement alone isn't
      * enough. Default: none.
@@ -92,14 +105,16 @@ interface SubjectStore {
      * The cached read, for a project's own policy source. Sharing it is what keeps
      * a bespoke rule from costing an extra query.
      */
-    state(flag: FlagMeta, ctx: Context): Promise<SubjectState | undefined>;
+    state(flag: FlagMeta, ctx: EvaluationContext): Promise<SubjectState | undefined>;
 }
 /**
  * Three sources over one storage read.
  *
- * They share a cache keyed on the `Context` object, which is per request, so a
+ * They share a cache keyed on the `EvaluationContext` object, which is per request, so a
  * request pays **one** load per flag however many of the three are in the chain —
- * the alternative being the same row fetched three times.
+ * the alternative being the same row fetched three times. Supply `loadAll` and
+ * the whole registry collapses to one read as well, which is what makes
+ * `resolver.resolveAll()` affordable.
  *
  * The library owns the semantics; you own the SQL. `load` returns whatever your
  * schema says; a row shape of `(subject_id, flag_key, override)` is all this needs.
@@ -139,11 +154,11 @@ interface RouteGateOptions<T extends FlagRegistry> {
 }
 interface RouteGate {
     /** May this path be served right now? */
-    isPermitted(pathname: string, ctx?: Context): Promise<boolean>;
+    isPermitted(pathname: string, ctx?: EvaluationContext): Promise<boolean>;
     /** Prefixes currently revealed by a flag. For filtering nav server-side. */
-    revealedPrefixes(ctx?: Context): Promise<string[]>;
+    revealedPrefixes(ctx?: EvaluationContext): Promise<string[]>;
     /** Everything servable right now — `allow` plus whatever is revealed. */
-    permittedPrefixes(ctx?: Context): Promise<string[]>;
+    permittedPrefixes(ctx?: EvaluationContext): Promise<string[]>;
 }
 /**
  * Turns "which flags are on" into "which paths may be served".
@@ -180,4 +195,4 @@ type FlagValues<T extends FlagRegistry> = Partial<{
  */
 declare function withFlags<T extends FlagRegistry>(flags: T, values?: FlagValues<T>): Resolver<T>;
 
-export { Context, type CookieOverrideOptions, DEFAULT_OVERRIDE_COOKIE, type EnvDefaultOptions, type EnvOverrideOptions, FlagMeta, FlagRegistry, FlagValue, type FlagValues, type LoadSubjectState, Resolver, type RouteGate, type RouteGateOptions, Source, type SubjectState, type SubjectStore, type SubjectStoreOptions, cookieOverride, createRouteGate, envDefault, envOverride, matchesPrefix, readOverrides, signOverrides, subjectStore, withFlags };
+export { type CookieOverrideOptions, DEFAULT_OVERRIDE_COOKIE, type EnvDefaultOptions, type EnvOverrideOptions, EvaluationContext, FlagMeta, FlagRegistry, FlagValue, type FlagValues, type LoadAllSubjectState, type LoadSubjectState, Resolver, type RouteGate, type RouteGateOptions, Source, type SubjectState, type SubjectStore, type SubjectStoreOptions, cookieOverride, createRouteGate, envDefault, envOverride, matchesPrefix, readOverrides, signOverrides, subjectStore, withFlags };

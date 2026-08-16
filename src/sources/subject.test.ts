@@ -49,12 +49,12 @@ describe("subjectStore", () => {
 
 	it("is undecided when the subject has no row", async () => {
 		const resolver = chain({});
-		await expect(resolver.resolve("sidecar", { subject: "org_1" })).resolves.toBe(false);
+		await expect(resolver.resolve("sidecar", { targetingKey: "org_1" })).resolves.toBe(false);
 	});
 
 	it("grants on an 'enabled' row", async () => {
 		const resolver = chain({ "org_1 sidecar": { override: "enabled" } });
-		await expect(resolver.resolve("sidecar", { subject: "org_1" })).resolves.toBe(true);
+		await expect(resolver.resolve("sidecar", { targetingKey: "org_1" })).resolves.toBe(true);
 	});
 
 	it("kills on a 'disabled' row even when something later would grant", async () => {
@@ -63,12 +63,12 @@ describe("subjectStore", () => {
 			flags,
 			sources: [s.kill, { name: "ga", decide: () => true }],
 		});
-		await expect(resolver.resolve("sidecar", { subject: "org_1" })).resolves.toBe(false);
+		await expect(resolver.resolve("sidecar", { targetingKey: "org_1" })).resolves.toBe(false);
 	});
 
 	it("grants a value, not only true", async () => {
 		const resolver = chain({ "org_1 pipeline": { override: "enabled", value: "v2" } });
-		await expect(resolver.resolve("pipeline", { subject: "org_1" })).resolves.toBe("v2");
+		await expect(resolver.resolve("pipeline", { targetingKey: "org_1" })).resolves.toBe("v2");
 	});
 
 	describe("opt-in requirement", () => {
@@ -78,7 +78,7 @@ describe("subjectStore", () => {
 				flags,
 				sources: [s.kill, s.requireOptIn, s.grant],
 			});
-			await expect(resolver.resolve("network", { subject: "org_1" })).resolves.toBe(false);
+			await expect(resolver.resolve("network", { targetingKey: "org_1" })).resolves.toBe(false);
 		});
 
 		it("allows it once opted in", async () => {
@@ -87,7 +87,7 @@ describe("subjectStore", () => {
 				flags,
 				sources: [s.kill, s.requireOptIn, s.grant],
 			});
-			await expect(resolver.resolve("network", { subject: "org_1" })).resolves.toBe(true);
+			await expect(resolver.resolve("network", { targetingKey: "org_1" })).resolves.toBe(true);
 		});
 
 		it("does not apply to flags outside requiresOptIn", async () => {
@@ -96,7 +96,7 @@ describe("subjectStore", () => {
 				flags,
 				sources: [s.kill, s.requireOptIn, s.grant],
 			});
-			await expect(resolver.resolve("sidecar", { subject: "org_1" })).resolves.toBe(true);
+			await expect(resolver.resolve("sidecar", { targetingKey: "org_1" })).resolves.toBe(true);
 		});
 
 		it("vetoes an entitlement granted by a LATER source, which is why it sits ahead of it", async () => {
@@ -105,7 +105,7 @@ describe("subjectStore", () => {
 				flags,
 				sources: [s.kill, s.requireOptIn, { name: "ga", decide: () => true }],
 			});
-			await expect(resolver.resolve("network", { subject: "org_1" })).resolves.toBe(false);
+			await expect(resolver.resolve("network", { targetingKey: "org_1" })).resolves.toBe(false);
 		});
 	});
 
@@ -115,7 +115,7 @@ describe("subjectStore", () => {
 			const resolver = chain({ "org_1 network": { override: "disabled" } });
 			await expect(
 				resolver.resolve("network", {
-					subject: "org_1",
+					targetingKey: "org_1",
 					cookie: (n) => (n === DEFAULT_OVERRIDE_COOKIE ? token : undefined),
 				}),
 			).resolves.toBe(false);
@@ -126,7 +126,7 @@ describe("subjectStore", () => {
 			const resolver = chain({});
 			await expect(
 				resolver.resolve("network", {
-					subject: "org_1",
+					targetingKey: "org_1",
 					cookie: (n) => (n === DEFAULT_OVERRIDE_COOKIE ? token : undefined),
 				}),
 			).resolves.toBe(true);
@@ -136,7 +136,7 @@ describe("subjectStore", () => {
 	it("loads once per request however many of the three sources run", async () => {
 		const onLoad = vi.fn();
 		const resolver = chain({ "org_1 network": { override: "enabled", optedIn: true } }, onLoad);
-		const ctx = { subject: "org_1" };
+		const ctx = { targetingKey: "org_1" };
 		await expect(resolver.resolve("network", ctx)).resolves.toBe(true);
 		expect(onLoad).toHaveBeenCalledTimes(1);
 	});
@@ -144,8 +144,8 @@ describe("subjectStore", () => {
 	it("loads again for a different request context", async () => {
 		const onLoad = vi.fn();
 		const resolver = chain({ "org_1 sidecar": { override: "enabled" } }, onLoad);
-		await resolver.resolve("sidecar", { subject: "org_1" });
-		await resolver.resolve("sidecar", { subject: "org_1" });
+		await resolver.resolve("sidecar", { targetingKey: "org_1" });
+		await resolver.resolve("sidecar", { targetingKey: "org_1" });
 		expect(onLoad).toHaveBeenCalledTimes(2);
 	});
 
@@ -157,10 +157,65 @@ describe("subjectStore", () => {
 			},
 		});
 		const resolver = createResolver({ flags, sources: [s.kill], onError });
-		await expect(resolver.resolve("sidecar", { subject: "org_1" })).resolves.toBe(false);
+		await expect(resolver.resolve("sidecar", { targetingKey: "org_1" })).resolves.toBe(false);
 		expect(onError).toHaveBeenCalledWith(expect.any(Error), {
 			flag: "sidecar",
 			source: "subjectKill",
 		});
+	});
+});
+
+describe("subjectStore({ loadAll })", () => {
+	function batched(rows: Record<string, SubjectState>, onLoad?: () => void) {
+		return subjectStore({
+			loadAll: (subject) => {
+				onLoad?.();
+				return Object.fromEntries(
+					Object.entries(rows)
+						.filter(([k]) => k.startsWith(subject + " "))
+						.map(([k, v]) => [k.slice(subject.length + 1), v]),
+				);
+			},
+			requiresOptIn: (flag) => flag.def.selfServe === true,
+		});
+	}
+
+	it("costs one read for the whole registry", async () => {
+		const onLoad = vi.fn();
+		const s = batched({ "org_1 sidecar": { override: "enabled" } }, onLoad);
+		const resolver = createResolver({ flags, sources: [s.kill, s.requireOptIn, s.grant] });
+
+		const all = await resolver.resolveAll({ targetingKey: "org_1" });
+
+		expect(all).toEqual({ network: false, sidecar: true, pipeline: "v1" });
+		// Three flags, three sources — nine potential reads, one actual.
+		expect(onLoad).toHaveBeenCalledTimes(1);
+	});
+
+	it("accepts a Map as well as an object", async () => {
+		const s = subjectStore({
+			loadAll: () => new Map([["sidecar", { override: "disabled" as const }]]),
+		});
+		const resolver = createResolver({ flags, sources: [s.kill] });
+		await expect(resolver.resolve("sidecar", { targetingKey: "org_1" })).resolves.toBe(false);
+	});
+
+	it("treats an absent key as no row", async () => {
+		const s = batched({});
+		const resolver = createResolver({ flags, sources: [s.kill, s.grant] });
+		await expect(resolver.resolve("sidecar", { targetingKey: "org_1" })).resolves.toBe(false);
+	});
+
+	it("caches per request, not globally — a second context re-reads", async () => {
+		const onLoad = vi.fn();
+		const s = batched({}, onLoad);
+		const resolver = createResolver({ flags, sources: [s.kill] });
+		await resolver.resolve("sidecar", { targetingKey: "org_1" });
+		await resolver.resolve("sidecar", { targetingKey: "org_1" });
+		expect(onLoad).toHaveBeenCalledTimes(2);
+	});
+
+	it("refuses to build with neither load nor loadAll", () => {
+		expect(() => subjectStore({})).toThrow(/needs `load` or `loadAll`/);
 	});
 });
